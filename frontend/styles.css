@@ -1,0 +1,85 @@
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(37, 99, 235, 0.14), transparent 35%),
+    linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(14px);
+}
+
+.candidate-card {
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.candidate-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+}
+
+.candidate-card:active {
+  transform: scale(0.985);
+}
+
+.modal-backdrop {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.modal-panel {
+  animation: modal-enter 0.28s ease-out;
+}
+
+@keyframes modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.hidden-until-ready {
+  opacity: 0;
+}
+
+.touch-target {
+  min-height: 44px;
+}
+
+.safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+@media (hover: none) {
+  .candidate-card:hover {
+    transform: none;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    font-size: 15px;
+  }
+
+  .glass-panel {
+    border-radius: 24px;
+  }
+
+  .candidate-card {
+    min-height: 168px;
+  }
+
+  .modal-panel {
+    border-radius: 24px;
+  }
+}
