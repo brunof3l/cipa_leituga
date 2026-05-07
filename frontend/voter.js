@@ -36,11 +36,11 @@ function createCandidateCard(candidate) {
   const button = document.createElement("button");
   button.type = "button";
   button.className =
-    "candidate-card glass-panel min-h-[168px] rounded-3xl border border-white/70 p-5 text-left shadow-lg shadow-slate-200/40 sm:p-6";
+    "candidate-card glass-panel min-h-[168px] rounded-3xl border border-white/70 p-5 text-center shadow-lg shadow-slate-200/40 sm:p-6 sm:text-left";
   button.setAttribute("aria-label", `Abrir detalhes de ${candidate.name}`);
 
   const image = document.createElement("img");
-  image.className = "h-16 w-16 rounded-full border-4 border-brand-100 object-cover sm:h-20 sm:w-20";
+  image.className = "mx-auto h-16 w-16 rounded-full border-4 border-brand-100 object-cover sm:mx-0 sm:h-20 sm:w-20";
   window.CipaApp.withFallbackPhoto(image, candidate.photoUrl, candidate.name);
 
   const title = document.createElement("h3");
@@ -56,7 +56,7 @@ function createCandidateCard(candidate) {
 
   const action = document.createElement("span");
   action.className =
-    "mt-5 inline-flex min-h-[40px] items-center rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 sm:text-sm";
+    "mx-auto mt-5 inline-flex min-h-[40px] items-center rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 sm:mx-0 sm:text-sm";
   action.textContent = "Visualizar candidatura";
 
   button.append(image, title, description, action);

@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const crypto = require("crypto");
 const express = require("express");
+const PDFDocument = require("pdfkit");
 const path = require("path");
 const {
   createCandidate,
@@ -195,12 +196,18 @@ function sanitizeCandidate(candidate, includeVotes = false) {
   return baseCandidate;
 }
 
-function escapeCsvValue(value) {
-  const normalizedValue = String(value ?? "").replace(/"/g, '""');
-  return `"${normalizedValue}"`;
+function formatDateTime(value) {
+  return new Date(value).toLocaleString("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "medium",
+  });
 }
 
-function buildVotingReportCsv(candidates) {
+function formatPercent(value) {
+  return `${value.toFixed(2).replace(".", ",")}%`;
+}
+
+function getVotingReportData(candidates) {
   const generatedAt = new Date().toISOString();
   const sortedCandidates = [...candidates].sort((left, right) => {
     const voteDifference = Number(right.votes || 0) - Number(left.votes || 0);
@@ -222,59 +229,205 @@ function buildVotingReportCsv(candidates) {
     totalVotes > 0
       ? `${sortedCandidates.filter((candidate) => Number(candidate.votes || 0) > 0).length} candidato(s) receberam voto(s)`
       : "Nenhum voto registrado ate o momento";
-  const lines = [
-    ["Relatorio Executivo", "Votacao CIPA"],
-    ["Gerado em", generatedAt],
-    ["Total de candidatos", String(sortedCandidates.length)],
-    ["Total de votos", String(totalVotes)],
-    ["Media de votos por candidato", averageVotes.toFixed(2).replace(".", ",")],
-    ["Lider atual", leader ? leader.name : "Sem candidatos"],
-    ["Maior votacao", String(highestVoteCount)],
-    [
-      "Situacao da lideranca",
-      leaders.length > 1 ? `Empate entre ${leaders.map((candidate) => candidate.name).join(", ")}` : "Lideranca isolada",
-    ],
-    ["Participacao", participationSummary],
-    [],
-    ["Ranking Geral"],
-    ["Posicao", "ID", "Nome", "Votos", "Percentual", "Diferenca para lider", "Descricao"],
-    ...sortedCandidates.map((candidate, index) => [
-      String(index + 1),
-      String(candidate.id),
-      candidate.name,
-      String(candidate.votes || 0),
-      totalVotes > 0
-        ? `${((Number(candidate.votes || 0) / totalVotes) * 100).toFixed(2).replace(".", ",")}%`
-        : "0,00%",
-      String(highestVoteCount - Number(candidate.votes || 0)),
-      candidate.description,
-    ]),
-    [],
-    ["Resumo Consolidado"],
-    ["Indicador", "Valor"],
-    ["Candidatos com voto", String(sortedCandidates.filter((candidate) => Number(candidate.votes || 0) > 0).length)],
-    ["Candidatos sem voto", String(sortedCandidates.filter((candidate) => Number(candidate.votes || 0) === 0).length)],
-    [
+  const candidatesWithVotes = sortedCandidates.filter((candidate) => Number(candidate.votes || 0) > 0).length;
+  const candidatesWithoutVotes = sortedCandidates.filter((candidate) => Number(candidate.votes || 0) === 0).length;
+  const leaderPercent =
+    totalVotes > 0 && leader ? (Number(leader.votes || 0) / totalVotes) * 100 : 0;
+  const runnerUpDifference = Math.max(0, highestVoteCount - Number(sortedCandidates[1]?.votes || 0));
+
+  return {
+    generatedAt,
+    sortedCandidates,
+    totalVotes,
+    leader,
+    averageVotes,
+    highestVoteCount,
+    leaders,
+    participationSummary,
+    candidatesWithVotes,
+    candidatesWithoutVotes,
+    leaderPercent,
+    runnerUpDifference,
+  };
+}
+
+function ensurePdfSpace(doc, neededHeight = 24) {
+  const bottomLimit = doc.page.height - doc.page.margins.bottom;
+
+  if (doc.y + neededHeight > bottomLimit) {
+    doc.addPage();
+  }
+}
+
+function drawMetricCard(doc, x, y, width, title, value) {
+  doc
+    .save()
+    .roundedRect(x, y, width, 54, 8)
+    .fillAndStroke("#F8FAFC", "#CBD5E1")
+    .restore();
+
+  doc
+    .font("Helvetica")
+    .fontSize(9)
+    .fillColor("#475569")
+    .text(title, x + 10, y + 10, { width: width - 20 });
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(15)
+    .fillColor("#0F172A")
+    .text(value, x + 10, y + 25, { width: width - 20 });
+}
+
+function buildVotingReportPdfBuffer(candidates) {
+  const report = getVotingReportData(candidates);
+
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      margin: 40,
+      bufferPages: true,
+    });
+    const chunks = [];
+
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    doc.font("Helvetica-Bold").fontSize(22).fillColor("#0F172A").text("Relatorio Executivo da Votacao CIPA");
+    doc.moveDown(0.25);
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor("#475569")
+      .text(`Emitido em ${formatDateTime(report.generatedAt)}`);
+
+    const cardY = doc.y + 16;
+    const gap = 12;
+    const cardWidth = (doc.page.width - doc.page.margins.left - doc.page.margins.right - gap) / 2;
+
+    drawMetricCard(doc, doc.page.margins.left, cardY, cardWidth, "Total de candidatos", String(report.sortedCandidates.length));
+    drawMetricCard(doc, doc.page.margins.left + cardWidth + gap, cardY, cardWidth, "Total de votos", String(report.totalVotes));
+    drawMetricCard(
+      doc,
+      doc.page.margins.left,
+      cardY + 66,
+      cardWidth,
+      "Lider atual",
+      report.leader ? report.leader.name : "Sem candidatos"
+    );
+    drawMetricCard(
+      doc,
+      doc.page.margins.left + cardWidth + gap,
+      cardY + 66,
+      cardWidth,
       "Percentual do lider",
-      totalVotes > 0 && leader
-        ? `${((Number(leader.votes || 0) / totalVotes) * 100).toFixed(2).replace(".", ",")}%`
-        : "0,00%",
-    ],
-    ["Diferenca entre 1o e 2o lugar", String(Math.max(0, highestVoteCount - Number(sortedCandidates[1]?.votes || 0)))],
-    [],
-    ["Detalhamento por Candidato"],
-    ["ID", "Nome", "Descricao", "Votos"],
-    ...sortedCandidates.map((candidate) => [
-      String(candidate.id),
-      candidate.name,
-      candidate.description,
-    ]),
-  ];
+      formatPercent(report.leaderPercent)
+    );
 
+    doc.y = cardY + 148;
+    doc.moveDown(0.5);
 
-  return lines
-    .map((line) => line.map((value) => escapeCsvValue(value)).join(";"))
-    .join("\n");
+    doc.font("Helvetica-Bold").fontSize(16).fillColor("#0F172A").text("Resumo Consolidado");
+    doc.moveDown(0.4);
+    doc.font("Helvetica").fontSize(10).fillColor("#334155");
+    [
+      `Media de votos por candidato: ${report.averageVotes.toFixed(2).replace(".", ",")}`,
+      `Maior votacao registrada: ${report.highestVoteCount}`,
+      `Situacao da lideranca: ${
+        report.leaders.length > 1
+          ? `empate entre ${report.leaders.map((candidate) => candidate.name).join(", ")}`
+          : "lideranca isolada"
+      }`,
+      `Participacao: ${report.participationSummary}`,
+      `Candidatos com voto: ${report.candidatesWithVotes}`,
+      `Candidatos sem voto: ${report.candidatesWithoutVotes}`,
+      `Diferenca entre 1o e 2o lugar: ${report.runnerUpDifference}`,
+    ].forEach((line) => {
+      ensurePdfSpace(doc, 18);
+      doc.text(`- ${line}`);
+    });
+
+    doc.moveDown(1);
+    doc.font("Helvetica-Bold").fontSize(16).fillColor("#0F172A").text("Ranking Geral");
+    doc.moveDown(0.4);
+
+    if (!report.sortedCandidates.length) {
+      doc.font("Helvetica").fontSize(10).fillColor("#475569").text("Nenhum candidato cadastrado no momento.");
+    } else {
+      report.sortedCandidates.forEach((candidate, index) => {
+        ensurePdfSpace(doc, 72);
+        const percent = report.totalVotes > 0 ? (Number(candidate.votes || 0) / report.totalVotes) * 100 : 0;
+
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(12)
+          .fillColor("#1D4ED8")
+          .text(`${index + 1}o lugar - ${candidate.name}`);
+        doc
+          .font("Helvetica")
+          .fontSize(10)
+          .fillColor("#0F172A")
+          .text(
+            `Votos: ${candidate.votes || 0} | Percentual: ${formatPercent(percent)} | Diferenca para o lider: ${
+              report.highestVoteCount - Number(candidate.votes || 0)
+            }`
+          );
+        doc
+          .font("Helvetica")
+          .fontSize(9)
+          .fillColor("#475569")
+          .text(`Descricao: ${candidate.description || "Sem descricao informada."}`, {
+            width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+          });
+        doc.moveDown(0.6);
+      });
+    }
+
+    doc.moveDown(0.5);
+    doc.font("Helvetica-Bold").fontSize(16).fillColor("#0F172A").text("Detalhamento por Candidato");
+    doc.moveDown(0.4);
+
+    report.sortedCandidates.forEach((candidate) => {
+      ensurePdfSpace(doc, 64);
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(11)
+        .fillColor("#0F172A")
+        .text(`${candidate.name} (ID ${candidate.id})`);
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#334155")
+        .text(`Votos recebidos: ${candidate.votes || 0}`);
+      doc
+        .font("Helvetica")
+        .fontSize(9)
+        .fillColor("#475569")
+        .text(candidate.description || "Sem descricao informada.");
+      doc.moveDown(0.5);
+    });
+
+    const pageRange = doc.bufferedPageRange();
+    for (let pageIndex = 0; pageIndex < pageRange.count; pageIndex += 1) {
+      doc.switchToPage(pageIndex);
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor("#64748B")
+        .text(
+          `Relatorio Executivo CIPA | Pagina ${pageIndex + 1} de ${pageRange.count}`,
+          doc.page.margins.left,
+          doc.page.height - doc.page.margins.bottom + 10,
+          {
+            align: "center",
+            width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+          }
+        );
+    }
+
+    doc.end();
+  });
 }
 
 app.post("/login", (request, response) => {
@@ -418,15 +571,15 @@ app.post("/admin/reset", requireAuth("admin"), async (request, response, next) =
 app.get("/admin/report", requireAuth("admin"), async (_request, response, next) => {
   try {
     const candidates = await listCandidates();
-    const reportCsv = buildVotingReportCsv(candidates);
+    const reportPdf = await buildVotingReportPdfBuffer(candidates);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
-    response.setHeader("Content-Type", "text/csv; charset=utf-8");
+    response.setHeader("Content-Type", "application/pdf");
     response.setHeader(
       "Content-Disposition",
-      `attachment; filename="relatorio-votacao-cipa-${timestamp}.csv"`
+      `attachment; filename="relatorio-votacao-cipa-${timestamp}.pdf"`
     );
-    response.status(200).send("\uFEFF" + reportCsv);
+    response.status(200).send(reportPdf);
   } catch (error) {
     next(error);
   }

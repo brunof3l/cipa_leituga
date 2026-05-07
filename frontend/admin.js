@@ -13,8 +13,12 @@ const listEmptyState = document.getElementById("list-empty-state");
 const resetVotesButton = document.getElementById("reset-votes");
 const downloadReportButton = document.getElementById("download-report");
 const logoutButton = document.getElementById("logout-button");
+const photoFileInput = document.getElementById("photoFile");
+const photoPreview = document.getElementById("photo-preview");
+const photoPreviewText = document.getElementById("photo-preview-text");
 
 let refreshIntervalId = null;
+const MAX_PHOTO_SIZE_BYTES = 2 * 1024 * 1024;
 
 function showFormFeedback(message, type) {
   formFeedback.textContent = message;
@@ -24,6 +28,22 @@ function showFormFeedback(message, type) {
       ? "border-red-200 bg-red-50 text-red-700"
       : "border-emerald-200 bg-emerald-50 text-emerald-700");
   formFeedback.classList.remove("hidden");
+}
+
+function resetPhotoPreview() {
+  photoPreview.classList.add("hidden");
+  photoPreview.removeAttribute("src");
+  photoPreviewText.textContent = "Nenhuma imagem selecionada.";
+}
+
+function readImageFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Nao foi possivel ler a imagem selecionada."));
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderCandidate(candidate) {
@@ -147,7 +167,7 @@ async function downloadVotingReport() {
 
     const contentDisposition = response.headers.get("content-disposition") || "";
     const matchedFileName = contentDisposition.match(/filename="([^"]+)"/i);
-    const fileName = matchedFileName?.[1] || "relatorio-votacao-cipa.csv";
+    const fileName = matchedFileName?.[1] || "relatorio-votacao-cipa.pdf";
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
     const temporaryLink = document.createElement("a");
@@ -159,7 +179,7 @@ async function downloadVotingReport() {
     temporaryLink.remove();
     window.URL.revokeObjectURL(downloadUrl);
 
-    showFormFeedback("Relatorio baixado com sucesso.", "success");
+    showFormFeedback("Relatorio em PDF baixado com sucesso.", "success");
   } catch (error) {
     if (error.message.includes("Sessao invalida") || error.message.includes("expirada")) {
       window.CipaApp.clearSession();
@@ -170,17 +190,72 @@ async function downloadVotingReport() {
     showFormFeedback(error.message, "error");
   } finally {
     downloadReportButton.disabled = false;
-    downloadReportButton.textContent = "Baixar Relatorio";
+    downloadReportButton.textContent = "Baixar PDF";
   }
 }
+
+photoFileInput.addEventListener("change", async () => {
+  const file = photoFileInput.files?.[0];
+
+  if (!file) {
+    resetPhotoPreview();
+    return;
+  }
+
+  if (!file.type.startsWith("image/")) {
+    photoFileInput.value = "";
+    resetPhotoPreview();
+    showFormFeedback("Selecione um arquivo de imagem valido.", "error");
+    return;
+  }
+
+  if (file.size > MAX_PHOTO_SIZE_BYTES) {
+    photoFileInput.value = "";
+    resetPhotoPreview();
+    showFormFeedback("A imagem deve ter no maximo 2 MB.", "error");
+    return;
+  }
+
+  try {
+    const previewDataUrl = await readImageFileAsDataUrl(file);
+    photoPreview.src = previewDataUrl;
+    photoPreview.classList.remove("hidden");
+    photoPreviewText.textContent = file.name;
+  } catch (error) {
+    photoFileInput.value = "";
+    resetPhotoPreview();
+    showFormFeedback(error.message, "error");
+  }
+});
 
 candidateForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const formData = new FormData(candidateForm);
+  const photoFile = photoFileInput.files?.[0];
+
+  if (!photoFile) {
+    showFormFeedback("Selecione uma foto do candidato.", "error");
+    return;
+  }
+
+  if (photoFile.size > MAX_PHOTO_SIZE_BYTES) {
+    showFormFeedback("A imagem deve ter no maximo 2 MB.", "error");
+    return;
+  }
+
+  let photoDataUrl = "";
+
+  try {
+    photoDataUrl = await readImageFileAsDataUrl(photoFile);
+  } catch (error) {
+    showFormFeedback(error.message, "error");
+    return;
+  }
+
   const payload = {
     name: String(formData.get("name") || "").trim(),
-    photoUrl: String(formData.get("photoUrl") || "").trim(),
+    photoUrl: photoDataUrl,
     description: String(formData.get("description") || "").trim(),
   };
 
@@ -191,6 +266,7 @@ candidateForm.addEventListener("submit", async (event) => {
     });
 
     candidateForm.reset();
+    resetPhotoPreview();
     showFormFeedback("Candidato cadastrado com sucesso.", "success");
     await loadCandidates();
   } catch (error) {
@@ -218,6 +294,7 @@ resetVotesButton.addEventListener("click", async () => {
 downloadReportButton.addEventListener("click", downloadVotingReport);
 logoutButton.addEventListener("click", () => window.CipaApp.logoutAndRedirect());
 
+resetPhotoPreview();
 loadCandidates();
 refreshIntervalId = window.setInterval(loadCandidates, 4000);
 
