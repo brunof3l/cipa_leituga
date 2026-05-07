@@ -18,13 +18,14 @@ const {
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 const frontendPath = path.join(__dirname, "..", "frontend");
+const jsonBodyLimit = process.env.JSON_BODY_LIMIT || "4mb";
 
 const collaboratorPassword = process.env.COLLABORATOR_PASSWORD || "COLAB2026";
 const adminPassword = process.env.ADMIN_PASSWORD || "ADMIN#CIPA";
 const tokenTtlMs = Number(process.env.SESSION_TTL_MS) || 1000 * 60 * 60 * 8;
 let initializationPromise = null;
 
-app.use(express.json());
+app.use(express.json({ limit: jsonBodyLimit }));
 app.use(async (_request, _response, next) => {
   try {
     validateRuntimeConfig();
@@ -259,6 +260,10 @@ function ensurePdfSpace(doc, neededHeight = 24) {
   }
 }
 
+function resetPdfTextCursor(doc) {
+  doc.x = doc.page.margins.left;
+}
+
 function drawMetricCard(doc, x, y, width, title, value) {
   doc
     .save()
@@ -326,6 +331,7 @@ function buildVotingReportPdfBuffer(candidates) {
     );
 
     doc.y = cardY + 148;
+    resetPdfTextCursor(doc);
     doc.moveDown(0.5);
 
     doc.font("Helvetica-Bold").fontSize(16).fillColor("#0F172A").text("Resumo Consolidado");
@@ -345,18 +351,22 @@ function buildVotingReportPdfBuffer(candidates) {
       `Diferenca entre 1o e 2o lugar: ${report.runnerUpDifference}`,
     ].forEach((line) => {
       ensurePdfSpace(doc, 18);
+      resetPdfTextCursor(doc);
       doc.text(`- ${line}`);
     });
 
     doc.moveDown(1);
+    resetPdfTextCursor(doc);
     doc.font("Helvetica-Bold").fontSize(16).fillColor("#0F172A").text("Ranking Geral");
     doc.moveDown(0.4);
 
     if (!report.sortedCandidates.length) {
+      resetPdfTextCursor(doc);
       doc.font("Helvetica").fontSize(10).fillColor("#475569").text("Nenhum candidato cadastrado no momento.");
     } else {
       report.sortedCandidates.forEach((candidate, index) => {
         ensurePdfSpace(doc, 72);
+        resetPdfTextCursor(doc);
         const percent = report.totalVotes > 0 ? (Number(candidate.votes || 0) / report.totalVotes) * 100 : 0;
 
         doc
@@ -385,11 +395,13 @@ function buildVotingReportPdfBuffer(candidates) {
     }
 
     doc.moveDown(0.5);
+    resetPdfTextCursor(doc);
     doc.font("Helvetica-Bold").fontSize(16).fillColor("#0F172A").text("Detalhamento por Candidato");
     doc.moveDown(0.4);
 
     report.sortedCandidates.forEach((candidate) => {
       ensurePdfSpace(doc, 64);
+      resetPdfTextCursor(doc);
       doc
         .font("Helvetica-Bold")
         .fontSize(11)
@@ -525,6 +537,11 @@ app.post("/admin/candidates", requireAuth("admin"), async (request, response, ne
       return;
     }
 
+    if (!/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(photoUrl)) {
+      response.status(400).json({ message: "Envie uma imagem valida para o candidato." });
+      return;
+    }
+
     const candidate = await createCandidate({
       name: name.trim(),
       photoUrl: photoUrl.trim(),
@@ -597,6 +614,14 @@ app.get(/.*/, (_request, response) => {
 
 app.use((error, _request, response, _next) => {
   console.error(error);
+
+  if (error?.type === "entity.too.large") {
+    response.status(413).json({
+      message: "A imagem enviada e muito grande. Tente uma foto menor.",
+    });
+    return;
+  }
+
   response.status(500).json({ message: "Erro interno do servidor." });
 });
 
