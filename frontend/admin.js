@@ -19,6 +19,8 @@ const photoPreviewText = document.getElementById("photo-preview-text");
 
 let refreshIntervalId = null;
 const MAX_PHOTO_SIZE_BYTES = 2 * 1024 * 1024;
+const MAX_UPLOAD_DIMENSION = 640;
+const UPLOAD_IMAGE_QUALITY = 0.82;
 
 function showFormFeedback(message, type) {
   formFeedback.textContent = message;
@@ -44,6 +46,36 @@ function readImageFileAsDataUrl(file) {
     reader.onerror = () => reject(new Error("Nao foi possivel ler a imagem selecionada."));
     reader.readAsDataURL(file);
   });
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Nao foi possivel processar a imagem selecionada."));
+    image.src = dataUrl;
+  });
+}
+
+async function buildOptimizedPhotoDataUrl(file) {
+  const originalDataUrl = await readImageFileAsDataUrl(file);
+  const image = await loadImageFromDataUrl(originalDataUrl);
+  const scale = Math.min(1, MAX_UPLOAD_DIMENSION / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("Nao foi possivel preparar a imagem para envio.");
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+  context.drawImage(image, 0, 0, width, height);
+
+  return canvas.toDataURL("image/jpeg", UPLOAD_IMAGE_QUALITY);
 }
 
 function renderCandidate(candidate) {
@@ -217,7 +249,7 @@ photoFileInput.addEventListener("change", async () => {
   }
 
   try {
-    const previewDataUrl = await readImageFileAsDataUrl(file);
+    const previewDataUrl = await buildOptimizedPhotoDataUrl(file);
     photoPreview.src = previewDataUrl;
     photoPreview.classList.remove("hidden");
     photoPreviewText.textContent = file.name;
@@ -247,7 +279,7 @@ candidateForm.addEventListener("submit", async (event) => {
   let photoDataUrl = "";
 
   try {
-    photoDataUrl = await readImageFileAsDataUrl(photoFile);
+    photoDataUrl = await buildOptimizedPhotoDataUrl(photoFile);
   } catch (error) {
     showFormFeedback(error.message, "error");
     return;
