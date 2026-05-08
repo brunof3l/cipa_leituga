@@ -7,6 +7,7 @@ const path = require("path");
 const {
   createCandidate,
   deleteCandidateById,
+  hasDeviceVoted,
   initializeDatabase,
   isTokenRevoked,
   listCandidates,
@@ -94,6 +95,20 @@ function readToken(request) {
   }
 
   return authorization.slice(7);
+}
+
+function readDeviceId(request) {
+  const deviceId = String(request.headers["x-device-id"] || "").trim();
+
+  if (!deviceId) {
+    return null;
+  }
+
+  if (!/^[a-zA-Z0-9._-]{16,128}$/.test(deviceId)) {
+    return null;
+  }
+
+  return deviceId;
 }
 
 function verifySessionToken(token) {
@@ -444,6 +459,7 @@ function buildVotingReportPdfBuffer(candidates) {
 
 app.post("/login", (request, response) => {
   const { password } = request.body || {};
+  const deviceId = readDeviceId(request);
 
   if (!password) {
     response.status(400).json({ message: "Informe a senha para continuar." });
@@ -451,13 +467,30 @@ app.post("/login", (request, response) => {
   }
 
   if (password === collaboratorPassword) {
-    const session = createSessionToken("voter");
+    if (!deviceId) {
+      response.status(400).json({ message: "Dispositivo invalido. Atualize a pagina e tente novamente." });
+      return;
+    }
 
-    response.json({
-      role: "voter",
-      token: session.token,
-      expiresAt: session.expiresAt,
-    });
+    Promise.resolve(hasDeviceVoted(deviceId))
+      .then((alreadyVoted) => {
+        if (alreadyVoted) {
+          response.status(409).json({ message: "Este dispositivo ja registrou um voto." });
+          return;
+        }
+
+        const session = createSessionToken("voter");
+
+        response.json({
+          role: "voter",
+          token: session.token,
+          expiresAt: session.expiresAt,
+        });
+      })
+      .catch((error) => {
+        console.error(error);
+        response.status(500).json({ message: "Erro interno do servidor." });
+      });
     return;
   }
 
@@ -504,13 +537,19 @@ app.get("/candidates", async (request, response, next) => {
 app.post("/vote/:id", requireAuth("voter"), async (request, response, next) => {
   try {
     const candidateId = Number(request.params.id);
+    const deviceId = readDeviceId(request);
 
     if (!Number.isInteger(candidateId)) {
       response.status(400).json({ message: "Candidato invalido." });
       return;
     }
 
-    const voteResult = await recordAnonymousVote(candidateId, request.session);
+    if (!deviceId) {
+      response.status(400).json({ message: "Dispositivo invalido. Atualize a pagina e tente novamente." });
+      return;
+    }
+
+    const voteResult = await recordAnonymousVote(candidateId, request.session, deviceId);
 
     if (voteResult.status === "candidate_not_found") {
       response.status(404).json({ message: "Candidato nao encontrado." });
@@ -519,6 +558,11 @@ app.post("/vote/:id", requireAuth("voter"), async (request, response, next) => {
 
     if (voteResult.status === "token_reused") {
       response.status(409).json({ message: "Esta sessao ja foi utilizada para votar ou encerrada." });
+      return;
+    }
+
+    if (voteResult.status === "device_already_voted") {
+      response.status(409).json({ message: "Este dispositivo ja registrou um voto." });
       return;
     }
 

@@ -32,6 +32,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS votes (
         id BIGSERIAL PRIMARY KEY,
         candidate_id BIGINT NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+        device_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `,
@@ -44,6 +45,8 @@ async function initializeDatabase() {
       )
     `,
     sql`CREATE INDEX IF NOT EXISTS idx_votes_candidate_id ON votes(candidate_id)`,
+    sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS device_id TEXT`,
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_device_id_unique ON votes(device_id) WHERE device_id IS NOT NULL`,
     sql`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
   ]);
 }
@@ -121,7 +124,19 @@ async function revokeToken({ tokenHash, role, expiresAt }) {
   `;
 }
 
-async function recordAnonymousVote(candidateId, session) {
+async function hasDeviceVoted(deviceId) {
+  const sql = getSql();
+  const [vote] = await sql`
+    SELECT id
+    FROM votes
+    WHERE device_id = ${deviceId}
+    LIMIT 1
+  `;
+
+  return Boolean(vote);
+}
+
+async function recordAnonymousVote(candidateId, session, deviceId) {
   const sql = getSql();
   const [result] = await sql`
     WITH candidate_row AS (
@@ -137,10 +152,16 @@ async function recordAnonymousVote(candidateId, session) {
       RETURNING token_hash
     ),
     vote_insert AS (
-      INSERT INTO votes (candidate_id)
-      SELECT id
+      INSERT INTO votes (candidate_id, device_id)
+      SELECT id, ${deviceId}
       FROM candidate_row
       WHERE EXISTS (SELECT 1 FROM token_lock)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM votes
+          WHERE device_id = ${deviceId}
+        )
+      ON CONFLICT (device_id) DO NOTHING
       RETURNING id
     ),
     candidate_update AS (
@@ -165,6 +186,10 @@ async function recordAnonymousVote(candidateId, session) {
     return { status: "token_reused" };
   }
 
+  if (!result?.id) {
+    return { status: "device_already_voted" };
+  }
+
   return {
     status: "success",
     candidate: {
@@ -178,6 +203,7 @@ module.exports = {
   createCandidate,
   deleteCandidateById,
   getCandidateById,
+  hasDeviceVoted,
   initializeDatabase,
   isTokenRevoked,
   listCandidates,

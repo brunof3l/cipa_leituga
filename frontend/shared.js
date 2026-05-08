@@ -1,6 +1,27 @@
 const SESSION_KEY = "cipa-session";
+const DEVICE_KEY = "cipa-device-id";
 const FALLBACK_PHOTO =
   "https://ui-avatars.com/api/?background=2563eb&color=ffffff&name=CIPA";
+
+function createDeviceId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `device-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function getDeviceId() {
+  const storedDeviceId = localStorage.getItem(DEVICE_KEY);
+
+  if (storedDeviceId) {
+    return storedDeviceId;
+  }
+
+  const newDeviceId = createDeviceId();
+  localStorage.setItem(DEVICE_KEY, newDeviceId);
+  return newDeviceId;
+}
 
 function getSession() {
   const raw = sessionStorage.getItem(SESSION_KEY);
@@ -35,13 +56,15 @@ function clearSession() {
 function getAuthHeaders() {
   const session = getSession();
 
-  if (!session?.token) {
-    return {};
+  const headers = {
+    "X-Device-Id": getDeviceId(),
+  };
+
+  if (session?.token) {
+    headers.Authorization = `Bearer ${session.token}`;
   }
 
-  return {
-    Authorization: `Bearer ${session.token}`,
-  };
+  return headers;
 }
 
 async function apiRequest(url, options = {}) {
@@ -105,6 +128,7 @@ function withFallbackPhoto(imageElement, photoUrl, label) {
 window.CipaApp = {
   apiRequest,
   clearSession,
+  getDeviceId,
   enforceRole,
   getSession,
   logoutAndRedirect,
