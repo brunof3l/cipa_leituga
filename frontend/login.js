@@ -21,6 +21,14 @@ function showFeedback(message, type) {
   feedback.classList.remove("hidden");
 }
 
+function getFriendlyLoginErrorMessage(error) {
+  if (error?.message?.toLowerCase().includes("encerrada")) {
+    return "Votacao encerrada.";
+  }
+
+  return error?.message || "Nao foi possivel entrar no sistema.";
+}
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   feedback.classList.add("hidden");
@@ -40,6 +48,6 @@ loginForm.addEventListener("submit", async (event) => {
       window.location.href = session.role === "admin" ? "/admin.html" : "/voter.html";
     }, 450);
   } catch (error) {
-    showFeedback(error.message, "error");
+    showFeedback(getFriendlyLoginErrorMessage(error), "error");
   }
 });

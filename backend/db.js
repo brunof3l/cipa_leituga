@@ -44,10 +44,22 @@ async function initializeDatabase() {
         revoked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `,
+    sql`
+      CREATE TABLE IF NOT EXISTS voting_settings (
+        id SMALLINT PRIMARY KEY,
+        is_open BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `,
     sql`CREATE INDEX IF NOT EXISTS idx_votes_candidate_id ON votes(candidate_id)`,
     sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS device_id TEXT`,
     sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_device_id_unique ON votes(device_id) WHERE device_id IS NOT NULL`,
     sql`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
+    sql`
+      INSERT INTO voting_settings (id, is_open)
+      VALUES (1, TRUE)
+      ON CONFLICT (id) DO NOTHING
+    `,
   ]);
 }
 
@@ -101,6 +113,39 @@ async function resetVotes() {
     sql`DELETE FROM votes`,
     sql`UPDATE candidates SET votes = 0`,
   ]);
+}
+
+async function getVotingStatus() {
+  const sql = getSql();
+  const [settings] = await sql`
+    SELECT is_open, updated_at
+    FROM voting_settings
+    WHERE id = 1
+    LIMIT 1
+  `;
+
+  return {
+    isOpen: settings ? Boolean(settings.is_open) : true,
+    updatedAt: settings?.updated_at || null,
+  };
+}
+
+async function setVotingStatus(isOpen) {
+  const sql = getSql();
+  const [settings] = await sql`
+    INSERT INTO voting_settings (id, is_open, updated_at)
+    VALUES (1, ${isOpen}, NOW())
+    ON CONFLICT (id)
+    DO UPDATE SET
+      is_open = EXCLUDED.is_open,
+      updated_at = NOW()
+    RETURNING is_open, updated_at
+  `;
+
+  return {
+    isOpen: Boolean(settings.is_open),
+    updatedAt: settings.updated_at,
+  };
 }
 
 async function isTokenRevoked(tokenHash) {
@@ -195,10 +240,12 @@ module.exports = {
   deleteCandidateById,
   getCandidateById,
   hasDeviceVoted,
+  getVotingStatus,
   initializeDatabase,
   isTokenRevoked,
   listCandidates,
   recordAnonymousVote,
   revokeToken,
   resetVotes,
+  setVotingStatus,
 };

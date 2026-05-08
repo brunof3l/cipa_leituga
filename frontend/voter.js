@@ -85,6 +85,13 @@ async function validateVoterAccess() {
   try {
     const status = await window.CipaApp.apiRequest("/voter-access");
 
+    if (!status.votingOpen) {
+      window.CipaApp.clearSession();
+      window.alert("A votacao esta encerrada no momento.");
+      window.location.href = "/index.html";
+      return false;
+    }
+
     if (!status.allowed) {
       window.CipaApp.clearSession();
       window.alert("Este dispositivo ja registrou um voto e nao pode acessar novamente a area do eleitor.");

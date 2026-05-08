@@ -12,12 +12,15 @@ const formFeedback = document.getElementById("form-feedback");
 const listEmptyState = document.getElementById("list-empty-state");
 const resetVotesButton = document.getElementById("reset-votes");
 const downloadReportButton = document.getElementById("download-report");
+const toggleVotingButton = document.getElementById("toggle-voting");
+const votingStatusBadge = document.getElementById("voting-status-badge");
 const logoutButton = document.getElementById("logout-button");
 const photoFileInput = document.getElementById("photoFile");
 const photoPreview = document.getElementById("photo-preview");
 const photoPreviewText = document.getElementById("photo-preview-text");
 
 let refreshIntervalId = null;
+let votingOpen = true;
 const MAX_PHOTO_SIZE_BYTES = 2 * 1024 * 1024;
 const MAX_UPLOAD_DIMENSION = 640;
 const UPLOAD_IMAGE_QUALITY = 0.82;
@@ -36,6 +39,18 @@ function resetPhotoPreview() {
   photoPreview.classList.add("hidden");
   photoPreview.removeAttribute("src");
   photoPreviewText.textContent = "Nenhuma imagem selecionada.";
+}
+
+function renderVotingStatus(isOpen) {
+  votingOpen = isOpen;
+  votingStatusBadge.textContent = isOpen ? "Votacao em andamento" : "Votacao encerrada";
+  votingStatusBadge.className = isOpen
+    ? "mt-3 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
+    : "mt-3 inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700";
+  toggleVotingButton.textContent = isOpen ? "Encerrar Votacao" : "Reabrir Votacao";
+  toggleVotingButton.className = isOpen
+    ? "touch-target w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100"
+    : "touch-target w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100";
 }
 
 function readImageFileAsDataUrl(file) {
@@ -161,6 +176,37 @@ async function loadCandidates() {
   } catch (error) {
     listEmptyState.textContent = error.message;
     listEmptyState.classList.remove("hidden");
+  }
+}
+
+async function loadVotingStatus() {
+  const status = await window.CipaApp.apiRequest("/admin/voting-status");
+  renderVotingStatus(Boolean(status.isOpen));
+}
+
+async function toggleVotingStatus() {
+  const nextStatus = !votingOpen;
+  const confirmed = window.confirm(
+    nextStatus ? "Deseja reabrir a votacao?" : "Deseja encerrar a votacao agora?"
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  toggleVotingButton.disabled = true;
+
+  try {
+    const result = await window.CipaApp.apiRequest("/admin/voting-status", {
+      method: "POST",
+      body: JSON.stringify({ isOpen: nextStatus }),
+    });
+    renderVotingStatus(Boolean(result.isOpen));
+    showFormFeedback(result.message, "success");
+  } catch (error) {
+    showFormFeedback(error.message, "error");
+  } finally {
+    toggleVotingButton.disabled = false;
   }
 }
 
@@ -324,11 +370,15 @@ resetVotesButton.addEventListener("click", async () => {
 });
 
 downloadReportButton.addEventListener("click", downloadVotingReport);
+toggleVotingButton.addEventListener("click", toggleVotingStatus);
 logoutButton.addEventListener("click", () => window.CipaApp.logoutAndRedirect());
 
 resetPhotoPreview();
-loadCandidates();
-refreshIntervalId = window.setInterval(loadCandidates, 4000);
+Promise.all([loadCandidates(), loadVotingStatus()]);
+refreshIntervalId = window.setInterval(() => {
+  loadCandidates();
+  loadVotingStatus();
+}, 4000);
 
 window.addEventListener("beforeunload", () => {
   if (refreshIntervalId) {

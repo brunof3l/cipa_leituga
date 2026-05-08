@@ -8,12 +8,14 @@ const {
   createCandidate,
   deleteCandidateById,
   hasDeviceVoted,
+  getVotingStatus,
   initializeDatabase,
   isTokenRevoked,
   listCandidates,
   recordAnonymousVote,
   revokeToken,
   resetVotes,
+  setVotingStatus,
 } = require("./db");
 
 const app = express();
@@ -210,6 +212,17 @@ function sanitizeCandidate(candidate, includeVotes = false) {
   }
 
   return baseCandidate;
+}
+
+async function ensureVotingOpen(response) {
+  const votingStatus = await getVotingStatus();
+
+  if (!votingStatus.isOpen) {
+    response.status(403).json({ message: "A votacao esta encerrada no momento." });
+    return false;
+  }
+
+  return true;
 }
 
 function formatDateTime(value) {
@@ -457,55 +470,61 @@ function buildVotingReportPdfBuffer(candidates) {
   });
 }
 
-app.post("/login", (request, response) => {
-  const { password } = request.body || {};
-  const deviceId = readDeviceId(request);
+app.post("/login", async (request, response, next) => {
+  try {
+    const { password } = request.body || {};
+    const deviceId = readDeviceId(request);
 
-  if (!password) {
-    response.status(400).json({ message: "Informe a senha para continuar." });
-    return;
-  }
-
-  if (password === collaboratorPassword) {
-    if (!deviceId) {
-      response.status(400).json({ message: "Dispositivo invalido. Atualize a pagina e tente novamente." });
+    if (!password) {
+      response.status(400).json({ message: "Informe a senha para continuar." });
       return;
     }
 
-    Promise.resolve(hasDeviceVoted(deviceId))
-      .then((alreadyVoted) => {
-        if (alreadyVoted) {
-          response.status(409).json({ message: "Este dispositivo ja registrou um voto." });
-          return;
-        }
+    if (password === collaboratorPassword) {
+      const votingStatus = await getVotingStatus();
 
-        const session = createSessionToken("voter");
+      if (!votingStatus.isOpen) {
+        response.status(403).json({ message: "A votacao esta encerrada no momento." });
+        return;
+      }
 
-        response.json({
-          role: "voter",
-          token: session.token,
-          expiresAt: session.expiresAt,
-        });
-      })
-      .catch((error) => {
-        console.error(error);
-        response.status(500).json({ message: "Erro interno do servidor." });
+      if (!deviceId) {
+        response.status(400).json({ message: "Dispositivo invalido. Atualize a pagina e tente novamente." });
+        return;
+      }
+
+      const alreadyVoted = await hasDeviceVoted(deviceId);
+
+      if (alreadyVoted) {
+        response.status(409).json({ message: "Este dispositivo ja registrou um voto." });
+        return;
+      }
+
+      const session = createSessionToken("voter");
+
+      response.json({
+        role: "voter",
+        token: session.token,
+        expiresAt: session.expiresAt,
       });
-    return;
+      return;
+    }
+
+    if (password === adminPassword) {
+      const session = createSessionToken("admin");
+
+      response.json({
+        role: "admin",
+        token: session.token,
+        expiresAt: session.expiresAt,
+      });
+      return;
+    }
+
+    response.status(401).json({ message: "Senha invalida." });
+  } catch (error) {
+    next(error);
   }
-
-  if (password === adminPassword) {
-    const session = createSessionToken("admin");
-
-    response.json({
-      role: "admin",
-      token: session.token,
-      expiresAt: session.expiresAt,
-    });
-    return;
-  }
-
-  response.status(401).json({ message: "Senha invalida." });
 });
 
 app.post("/logout", requireAuth(), async (request, response, next) => {
@@ -543,8 +562,14 @@ app.get("/voter-access", async (request, response, next) => {
       return;
     }
 
+    const votingStatus = await getVotingStatus();
     const alreadyVoted = await hasDeviceVoted(deviceId);
-    response.json({ allowed: !alreadyVoted, alreadyVoted });
+    const allowed = votingStatus.isOpen && !alreadyVoted;
+    response.json({
+      allowed,
+      alreadyVoted,
+      votingOpen: votingStatus.isOpen,
+    });
   } catch (error) {
     next(error);
   }
@@ -562,6 +587,12 @@ app.post("/vote/:id", requireAuth("voter"), async (request, response, next) => {
 
     if (!deviceId) {
       response.status(400).json({ message: "Dispositivo invalido. Atualize a pagina e tente novamente." });
+      return;
+    }
+
+    const votingIsOpen = await ensureVotingOpen(response);
+
+    if (!votingIsOpen) {
       return;
     }
 
@@ -583,6 +614,34 @@ app.post("/vote/:id", requireAuth("voter"), async (request, response, next) => {
     }
 
     response.json({ message: "Voto registrado com sucesso." });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/admin/voting-status", requireAuth("admin"), async (_request, response, next) => {
+  try {
+    const votingStatus = await getVotingStatus();
+    response.json(votingStatus);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/admin/voting-status", requireAuth("admin"), async (request, response, next) => {
+  try {
+    const { isOpen } = request.body || {};
+
+    if (typeof isOpen !== "boolean") {
+      response.status(400).json({ message: "Informe um status valido para a votacao." });
+      return;
+    }
+
+    const votingStatus = await setVotingStatus(isOpen);
+    response.json({
+      ...votingStatus,
+      message: isOpen ? "Votacao reaberta com sucesso." : "Votacao encerrada com sucesso.",
+    });
   } catch (error) {
     next(error);
   }
