@@ -138,65 +138,56 @@ async function hasDeviceVoted(deviceId) {
 
 async function recordAnonymousVote(candidateId, session, deviceId) {
   const sql = getSql();
-  const [result] = await sql`
-    WITH candidate_row AS (
-      SELECT id
-      FROM candidates
-      WHERE id = ${candidateId}
-    ),
-    token_lock AS (
-      INSERT INTO revoked_tokens (token_hash, role, expires_at)
-      SELECT ${session.tokenHash}, ${session.role}, TO_TIMESTAMP(${session.exp} / 1000.0)
-      WHERE EXISTS (SELECT 1 FROM candidate_row)
-      ON CONFLICT (token_hash) DO NOTHING
-      RETURNING token_hash
-    ),
-    vote_insert AS (
-      INSERT INTO votes (candidate_id, device_id)
-      SELECT id, ${deviceId}
-      FROM candidate_row
-      WHERE EXISTS (SELECT 1 FROM token_lock)
-        AND NOT EXISTS (
-          SELECT 1
-          FROM votes
-          WHERE device_id = ${deviceId}
-        )
-      ON CONFLICT (device_id) DO NOTHING
-      RETURNING id
-    ),
-    candidate_update AS (
-      UPDATE candidates
-      SET votes = votes + 1
-      WHERE id = ${candidateId}
-        AND EXISTS (SELECT 1 FROM vote_insert)
-      RETURNING id, votes
-    )
-    SELECT
-      EXISTS (SELECT 1 FROM candidate_row) AS candidate_exists,
-      EXISTS (SELECT 1 FROM token_lock) AS token_accepted,
-      (SELECT id FROM candidate_update LIMIT 1) AS id,
-      (SELECT votes FROM candidate_update LIMIT 1) AS votes
-  `;
+  const candidate = await getCandidateById(candidateId);
 
-  if (!result?.candidate_exists) {
+  if (!candidate) {
     return { status: "candidate_not_found" };
   }
 
-  if (!result?.token_accepted) {
+  const [tokenLock] = await sql`
+    INSERT INTO revoked_tokens (token_hash, role, expires_at)
+    VALUES (${session.tokenHash}, ${session.role}, TO_TIMESTAMP(${session.exp} / 1000.0))
+    ON CONFLICT (token_hash) DO NOTHING
+    RETURNING token_hash
+  `;
+
+  if (!tokenLock) {
     return { status: "token_reused" };
   }
 
-  if (!result?.id) {
+  const alreadyVoted = await hasDeviceVoted(deviceId);
+
+  if (alreadyVoted) {
     return { status: "device_already_voted" };
   }
 
-  return {
-    status: "success",
-    candidate: {
-      id: result.id,
-      votes: result.votes,
-    },
-  };
+  try {
+    await sql`
+      INSERT INTO votes (candidate_id, device_id)
+      VALUES (${candidateId}, ${deviceId})
+    `;
+
+    const [updatedCandidate] = await sql`
+      UPDATE candidates
+      SET votes = votes + 1
+      WHERE id = ${candidateId}
+      RETURNING id, votes
+    `;
+
+    return {
+      status: "success",
+      candidate: {
+        id: updatedCandidate.id,
+        votes: updatedCandidate.votes,
+      },
+    };
+  } catch (error) {
+    if (error?.code === "23505") {
+      return { status: "device_already_voted" };
+    }
+
+    throw error;
+  }
 }
 
 module.exports = {

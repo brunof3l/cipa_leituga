@@ -534,6 +534,22 @@ app.get("/candidates", async (request, response, next) => {
   }
 });
 
+app.get("/voter-access", async (request, response, next) => {
+  try {
+    const deviceId = readDeviceId(request);
+
+    if (!deviceId) {
+      response.status(400).json({ message: "Dispositivo invalido. Atualize a pagina e tente novamente." });
+      return;
+    }
+
+    const alreadyVoted = await hasDeviceVoted(deviceId);
+    response.json({ allowed: !alreadyVoted, alreadyVoted });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/vote/:id", requireAuth("voter"), async (request, response, next) => {
   try {
     const candidateId = Number(request.params.id);

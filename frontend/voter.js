@@ -1,9 +1,5 @@
 const session = window.CipaApp.enforceRole("voter");
 
-if (session) {
-  document.body.classList.remove("hidden-until-ready");
-}
-
 const candidateGrid = document.getElementById("candidate-grid");
 const emptyState = document.getElementById("empty-state");
 const modal = document.getElementById("candidate-modal");
@@ -85,6 +81,27 @@ async function loadCandidates() {
   }
 }
 
+async function validateVoterAccess() {
+  try {
+    const status = await window.CipaApp.apiRequest("/voter-access");
+
+    if (!status.allowed) {
+      window.CipaApp.clearSession();
+      window.alert("Este dispositivo ja registrou um voto e nao pode acessar novamente a area do eleitor.");
+      window.location.href = "/index.html";
+      return false;
+    }
+
+    document.body.classList.remove("hidden-until-ready");
+    return true;
+  } catch (error) {
+    window.CipaApp.clearSession();
+    window.alert(error.message);
+    window.location.href = "/index.html";
+    return false;
+  }
+}
+
 confirmVoteButton.addEventListener("click", async () => {
   if (!selectedCandidate) {
     return;
@@ -124,4 +141,10 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-loadCandidates();
+if (session) {
+  validateVoterAccess().then((allowed) => {
+    if (allowed) {
+      loadCandidates();
+    }
+  });
+}
